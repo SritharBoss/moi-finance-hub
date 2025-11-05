@@ -72,7 +72,7 @@ const Dashboard = () => {
           <TabsList className="grid w-full grid-cols-3 max-w-2xl mx-auto">
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
             <TabsTrigger value="customers">Customers</TabsTrigger>
-            <TabsTrigger value="transactions">Transactions</TabsTrigger>
+            <TabsTrigger value="transactions">Transaction Log</TabsTrigger>
           </TabsList>
 
           <TabsContent value="dashboard">
