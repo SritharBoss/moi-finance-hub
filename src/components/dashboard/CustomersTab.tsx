@@ -3,11 +3,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import * as z from "zod";
 
 interface Customer {
   id: string;
@@ -17,7 +24,16 @@ interface Customer {
   pendingAmount: number;
   createdDate: string;
   pageNo: number;
+  notes?: string;
 }
+
+const customerSchema = z.object({
+  pageNo: z.string().min(1, "Page number is required"),
+  firstName: z.string().min(1, "First name is required").max(100),
+  lastName: z.string().min(1, "Last name is required").max(100),
+  villageName: z.string().min(1, "Village is required").max(100),
+  notes: z.string().max(500).optional(),
+});
 
 interface Transaction {
   id: string;
@@ -33,6 +49,7 @@ const CustomersTab = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [filters, setFilters] = useState({
     id: "",
     firstName: "",
@@ -41,35 +58,90 @@ const CustomersTab = () => {
     pageNo: "",
   });
   const itemsPerPage = 10;
+  const { toast } = useToast();
+  
+  const form = useForm<z.infer<typeof customerSchema>>({
+    resolver: zodResolver(customerSchema),
+    defaultValues: {
+      pageNo: "",
+      firstName: "",
+      lastName: "",
+      villageName: "",
+      notes: "",
+    },
+  });
 
   useEffect(() => {
-    // TODO: Replace with actual API call
-    const fetchCustomers = async () => {
-      try {
-        // const response = await fetch(`/api/customers?page=${currentPage}`);
-        // const data = await response.json();
-        
-        // Mock data for demonstration
-        const mockCustomers: Customer[] = Array.from({ length: 25 }, (_, i) => ({
-          id: `cust-${i + 1}`,
-          firstName: `First${i + 1}`,
-          lastName: `Last${i + 1}`,
-          villageName: `Village ${i % 5 + 1}`,
-          pendingAmount: Math.random() > 0.5 ? Math.floor(Math.random() * 10000) : -Math.floor(Math.random() * 5000),
-          createdDate: new Date(2024, Math.floor(Math.random() * 12), Math.floor(Math.random() * 28) + 1).toISOString(),
-          pageNo: Math.floor(i / 5) + 1,
-        }));
-        
-        setCustomers(mockCustomers);
-      } catch (error) {
-        console.error("Error fetching customers:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchCustomers();
-  }, [currentPage]);
+  }, []);
+
+  const fetchCustomers = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("customers")
+        .select("*")
+        .order("created_date", { ascending: false });
+
+      if (error) throw error;
+
+      const formattedCustomers: Customer[] = (data || []).map((customer) => ({
+        id: customer.id,
+        firstName: customer.first_name,
+        lastName: customer.last_name,
+        villageName: customer.village_name,
+        pendingAmount: customer.pending_amount,
+        createdDate: customer.created_date,
+        pageNo: customer.page_no,
+        notes: customer.notes || undefined,
+      }));
+
+      setCustomers(formattedCustomers);
+    } catch (error) {
+      console.error("Error fetching customers:", error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch customers",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onSubmit = async (values: z.infer<typeof customerSchema>) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("No user found");
+
+      const { error } = await supabase.from("customers").insert({
+        user_id: user.id,
+        page_no: parseInt(values.pageNo),
+        first_name: values.firstName,
+        last_name: values.lastName,
+        village_name: values.villageName,
+        notes: values.notes || null,
+      });
+
+      if (error) throw error;
+
+      toast({
+        title: "Success",
+        description: "Customer created successfully",
+      });
+
+      form.reset();
+      setCreateDialogOpen(false);
+      fetchCustomers();
+    } catch (error) {
+      console.error("Error creating customer:", error);
+      toast({
+        title: "Error",
+        description: "Failed to create customer",
+        variant: "destructive",
+      });
+    }
+  };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
@@ -144,8 +216,12 @@ const CustomersTab = () => {
   return (
     <>
       <Card>
-        <CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
           <CardTitle>Customer Management</CardTitle>
+          <Button onClick={() => setCreateDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-2" />
+            Create Customer
+          </Button>
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
@@ -209,6 +285,7 @@ const CustomersTab = () => {
                       />
                     </div>
                   </TableHead>
+                  <TableHead>Notes</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -232,6 +309,9 @@ const CustomersTab = () => {
                       {formatDate(customer.createdDate)}
                     </TableCell>
                     <TableCell>{customer.pageNo}</TableCell>
+                    <TableCell className="text-muted-foreground max-w-xs truncate">
+                      {customer.notes || "-"}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -300,6 +380,84 @@ const CustomersTab = () => {
               ))}
             </div>
           </ScrollArea>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Create New Customer</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="pageNo">Page Number</Label>
+              <Input
+                id="pageNo"
+                type="number"
+                {...form.register("pageNo")}
+                placeholder="Enter page number"
+              />
+              {form.formState.errors.pageNo && (
+                <p className="text-sm text-destructive">{form.formState.errors.pageNo.message}</p>
+              )}
+            </div>
+            
+            <div className="space-y-2">
+              <Label htmlFor="firstName">First Name</Label>
+              <Input
+                id="firstName"
+                {...form.register("firstName")}
+                placeholder="Enter first name"
+              />
+              {form.formState.errors.firstName && (
+                <p className="text-sm text-destructive">{form.formState.errors.firstName.message}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="lastName">Last Name</Label>
+              <Input
+                id="lastName"
+                {...form.register("lastName")}
+                placeholder="Enter last name"
+              />
+              {form.formState.errors.lastName && (
+                <p className="text-sm text-destructive">{form.formState.errors.lastName.message}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="villageName">Village</Label>
+              <Input
+                id="villageName"
+                {...form.register("villageName")}
+                placeholder="Enter village name"
+              />
+              {form.formState.errors.villageName && (
+                <p className="text-sm text-destructive">{form.formState.errors.villageName.message}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="notes">Notes (Optional)</Label>
+              <Textarea
+                id="notes"
+                {...form.register("notes")}
+                placeholder="Enter any additional notes"
+                rows={3}
+              />
+              {form.formState.errors.notes && (
+                <p className="text-sm text-destructive">{form.formState.errors.notes.message}</p>
+              )}
+            </div>
+
+            <div className="flex gap-2 justify-end">
+              <Button type="button" variant="outline" onClick={() => setCreateDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button type="submit">Create Customer</Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
     </>
