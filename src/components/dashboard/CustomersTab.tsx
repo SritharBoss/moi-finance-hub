@@ -3,7 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, Edit, Trash2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 interface Customer {
   id: string;
@@ -27,6 +28,15 @@ interface Customer {
   notes?: string;
 }
 
+interface Transaction {
+  id: string;
+  customer_id: string;
+  notes: string | null;
+  amount: number;
+  event_date: string;
+  created_date: string;
+}
+
 const customerSchema = z.object({
   pageNo: z.string().min(1, "Page number is required"),
   firstName: z.string().min(1, "First name is required").max(100),
@@ -35,21 +45,24 @@ const customerSchema = z.object({
   notes: z.string().max(500).optional(),
 });
 
-interface Transaction {
-  id: string;
-  notes: string;
-  amount: number;
-  createdDate: string;
-  customerId: string;
-}
+const transactionSchema = z.object({
+  amount: z.string().min(1, "Amount is required"),
+  eventDate: z.string().min(1, "Event date is required"),
+  notes: z.string().max(500).optional(),
+});
 
 const CustomersTab = () => {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [customerTransactions, setCustomerTransactions] = useState<Transaction[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [transactionDialogOpen, setTransactionDialogOpen] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [deleteCustomerDialogOpen, setDeleteCustomerDialogOpen] = useState(false);
+  const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
+  const [deleteTransactionId, setDeleteTransactionId] = useState<string | null>(null);
   const [filters, setFilters] = useState({
     id: "",
     firstName: "",
@@ -67,6 +80,15 @@ const CustomersTab = () => {
       firstName: "",
       lastName: "",
       villageName: "",
+      notes: "",
+    },
+  });
+
+  const transactionForm = useForm<z.infer<typeof transactionSchema>>({
+    resolver: zodResolver(transactionSchema),
+    defaultValues: {
+      amount: "",
+      eventDate: "",
       notes: "",
     },
   });
@@ -143,6 +165,141 @@ const CustomersTab = () => {
     }
   };
 
+  const handleCustomerClick = async (customer: Customer) => {
+    setSelectedCustomer(customer);
+    
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('*')
+      .eq('customer_id', customer.id)
+      .order('created_date', { ascending: false });
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to fetch transactions",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setTransactions(data || []);
+  };
+
+  const handleDeleteCustomer = async () => {
+    if (!customerToDelete) return;
+
+    const { error } = await supabase
+      .from('customers')
+      .delete()
+      .eq('id', customerToDelete.id);
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete customer",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Success",
+      description: "Customer deleted successfully",
+    });
+
+    setDeleteCustomerDialogOpen(false);
+    setCustomerToDelete(null);
+    fetchCustomers();
+  };
+
+  const onTransactionSubmit = async (values: z.infer<typeof transactionSchema>) => {
+    if (!selectedCustomer) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    if (editingTransaction) {
+      const { error } = await supabase
+        .from('transactions')
+        .update({
+          amount: parseFloat(values.amount),
+          event_date: values.eventDate,
+          notes: values.notes || null,
+        })
+        .eq('id', editingTransaction.id);
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to update transaction",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Success",
+        description: "Transaction updated successfully",
+      });
+    } else {
+      const { error } = await supabase
+        .from('transactions')
+        .insert({
+          customer_id: selectedCustomer.id,
+          user_id: user.id,
+          amount: parseFloat(values.amount),
+          event_date: values.eventDate,
+          notes: values.notes || null,
+        });
+
+      if (error) {
+        toast({
+          title: "Error",
+          description: "Failed to create transaction",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Success",
+        description: "Transaction created successfully",
+      });
+    }
+
+    setTransactionDialogOpen(false);
+    setEditingTransaction(null);
+    transactionForm.reset();
+    handleCustomerClick(selectedCustomer);
+  };
+
+  const handleDeleteTransaction = async () => {
+    if (!deleteTransactionId || !selectedCustomer) return;
+
+    const { error } = await supabase
+      .from('transactions')
+      .delete()
+      .eq('id', deleteTransactionId);
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Failed to delete transaction",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    toast({
+      title: "Success",
+      description: "Transaction deleted successfully",
+    });
+
+    setDeleteTransactionId(null);
+    handleCustomerClick(selectedCustomer);
+  };
+
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
@@ -167,19 +324,6 @@ const CustomersTab = () => {
       hour: '2-digit',
       minute: '2-digit',
     });
-  };
-
-  const handleCustomerClick = (customer: Customer) => {
-    setSelectedCustomer(customer);
-    // Mock transactions for the selected customer
-    const mockTransactions: Transaction[] = Array.from({ length: Math.floor(Math.random() * 10) + 5 }, (_, i) => ({
-      id: `txn-${customer.id}-${i + 1}`,
-      notes: `Transaction ${i + 1} for ${customer.firstName}`,
-      amount: Math.random() > 0.5 ? Math.floor(Math.random() * 5000) : -Math.floor(Math.random() * 3000),
-      createdDate: new Date(2024, Math.floor(Math.random() * 12), Math.floor(Math.random() * 28) + 1).toISOString(),
-      customerId: customer.id,
-    }));
-    setCustomerTransactions(mockTransactions);
   };
 
   const filteredCustomers = customers.filter((customer) => {
@@ -229,88 +373,122 @@ const CustomersTab = () => {
               <TableHeader>
                 <TableRow>
                   <TableHead>
-                    <div className="space-y-2">
-                      <div>ID</div>
-                      <Input
-                        placeholder="Filter ID"
-                        value={filters.id}
-                        onChange={(e) => setFilters({ ...filters, id: e.target.value })}
-                        className="h-8"
-                      />
-                    </div>
+                    <Input
+                      placeholder="Filter Customer ID..."
+                      value={filters.id}
+                      onChange={(e) => setFilters({ ...filters, id: e.target.value })}
+                      className="h-8"
+                    />
                   </TableHead>
                   <TableHead>
-                    <div className="space-y-2">
-                      <div>First Name</div>
-                      <Input
-                        placeholder="Filter name"
-                        value={filters.firstName}
-                        onChange={(e) => setFilters({ ...filters, firstName: e.target.value })}
-                        className="h-8"
-                      />
-                    </div>
+                    <Input
+                      placeholder="Filter First Name..."
+                      value={filters.firstName}
+                      onChange={(e) => setFilters({ ...filters, firstName: e.target.value })}
+                      className="h-8"
+                    />
                   </TableHead>
                   <TableHead>
-                    <div className="space-y-2">
-                      <div>Last Name</div>
-                      <Input
-                        placeholder="Filter name"
-                        value={filters.lastName}
-                        onChange={(e) => setFilters({ ...filters, lastName: e.target.value })}
-                        className="h-8"
-                      />
-                    </div>
+                    <Input
+                      placeholder="Filter Last Name..."
+                      value={filters.lastName}
+                      onChange={(e) => setFilters({ ...filters, lastName: e.target.value })}
+                      className="h-8"
+                    />
                   </TableHead>
                   <TableHead>
-                    <div className="space-y-2">
-                      <div>Village</div>
-                      <Input
-                        placeholder="Filter village"
-                        value={filters.villageName}
-                        onChange={(e) => setFilters({ ...filters, villageName: e.target.value })}
-                        className="h-8"
-                      />
-                    </div>
+                    <Input
+                      placeholder="Filter Village..."
+                      value={filters.villageName}
+                      onChange={(e) => setFilters({ ...filters, villageName: e.target.value })}
+                      className="h-8"
+                    />
                   </TableHead>
-                  <TableHead className="text-right">Pending Amount</TableHead>
-                  <TableHead>Created Date</TableHead>
                   <TableHead>
-                    <div className="space-y-2">
-                      <div>Page No</div>
-                      <Input
-                        placeholder="Filter page"
-                        value={filters.pageNo}
-                        onChange={(e) => setFilters({ ...filters, pageNo: e.target.value })}
-                        className="h-8"
-                      />
-                    </div>
+                    <Input
+                      placeholder="Filter Page No..."
+                      value={filters.pageNo}
+                      onChange={(e) => setFilters({ ...filters, pageNo: e.target.value })}
+                      className="h-8"
+                    />
                   </TableHead>
+                  <TableHead>Pending Amount</TableHead>
                   <TableHead>Notes</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedCustomers.map((customer) => (
-                  <TableRow 
-                    key={customer.id}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => handleCustomerClick(customer)}
-                  >
-                    <TableCell className="font-medium">{customer.id}</TableCell>
-                    <TableCell>{customer.firstName}</TableCell>
-                    <TableCell>{customer.lastName}</TableCell>
-                    <TableCell>{customer.villageName}</TableCell>
-                    <TableCell className="text-right">
+                  <TableRow key={customer.id}>
+                    <TableCell 
+                      className="cursor-pointer hover:bg-muted/50 font-medium"
+                      onClick={() => handleCustomerClick(customer)}
+                    >
+                      {customer.id}
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => handleCustomerClick(customer)}
+                    >
+                      {customer.firstName}
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => handleCustomerClick(customer)}
+                    >
+                      {customer.lastName}
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => handleCustomerClick(customer)}
+                    >
+                      {customer.villageName}
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => handleCustomerClick(customer)}
+                    >
+                      {customer.pageNo}
+                    </TableCell>
+                    <TableCell 
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => handleCustomerClick(customer)}
+                    >
                       <span className={customer.pendingAmount >= 0 ? "text-success" : "text-destructive"}>
                         {customer.pendingAmount >= 0 ? "+" : "-"}
                         {formatCurrency(customer.pendingAmount)}
                       </span>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
-                      {formatDate(customer.createdDate)}
-                    </TableCell>
-                    <TableCell>{customer.pageNo}</TableCell>
-                    <TableCell className="text-muted-foreground max-w-xs truncate">
+                    <TableCell 
+                      className="cursor-pointer hover:bg-muted/50 max-w-xs truncate"
+                      onClick={() => handleCustomerClick(customer)}
+                    >
                       {customer.notes || "-"}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedCustomer(customer);
+                            setTransactionDialogOpen(true);
+                          }}
+                        >
+                          Add Transaction
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCustomerToDelete(customer);
+                            setDeleteCustomerDialogOpen(true);
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -350,36 +528,138 @@ const CustomersTab = () => {
       </Card>
 
       <Dialog open={!!selectedCustomer} onOpenChange={() => setSelectedCustomer(null)}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>
-              Transaction History - {selectedCustomer?.firstName} {selectedCustomer?.lastName}
-            </DialogTitle>
+            <DialogTitle>Transaction History</DialogTitle>
           </DialogHeader>
-          <ScrollArea className="h-96">
-            <div className="space-y-3">
-              {customerTransactions.map((transaction) => (
-                <div
-                  key={transaction.id}
-                  className="flex items-center justify-between p-4 border rounded-lg"
-                >
-                  <div className="flex-1">
-                    <p className="font-medium">{transaction.notes}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {formatDateTime(transaction.createdDate)}
-                    </p>
-                  </div>
-                  <Badge
-                    variant={transaction.amount >= 0 ? "default" : "destructive"}
-                    className="ml-4"
-                  >
-                    {transaction.amount >= 0 ? "+" : "-"}
-                    {formatCurrency(transaction.amount)}
-                  </Badge>
+          <div className="space-y-4">
+            {selectedCustomer && (
+              <div className="grid grid-cols-2 gap-4 p-4 bg-muted rounded-lg">
+                <div>
+                  <p className="text-sm text-muted-foreground">Name</p>
+                  <p className="font-medium">{selectedCustomer.firstName} {selectedCustomer.lastName}</p>
                 </div>
-              ))}
+                <div>
+                  <p className="text-sm text-muted-foreground">Village</p>
+                  <p className="font-medium">{selectedCustomer.villageName}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Page No</p>
+                  <p className="font-medium">{selectedCustomer.pageNo}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Pending Amount</p>
+                  <p className="font-medium">{formatCurrency(selectedCustomer.pendingAmount)}</p>
+                </div>
+              </div>
+            )}
+            <ScrollArea className="h-[400px]">
+              <div className="space-y-2">
+                {transactions.map((transaction) => (
+                  <div
+                    key={transaction.id}
+                    className="flex items-center justify-between p-4 border rounded-lg"
+                  >
+                    <div className="flex-1">
+                      <p className="font-medium">{transaction.notes || "No notes"}</p>
+                      <div className="flex gap-4 text-sm text-muted-foreground">
+                        <span>Created: {formatDateTime(transaction.created_date)}</span>
+                        <span>Event: {formatDateTime(transaction.event_date)}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={transaction.amount > 0 ? "default" : "destructive"}>
+                        {transaction.amount > 0 ? "+" : "-"}
+                        {formatCurrency(Math.abs(transaction.amount))}
+                      </Badge>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditingTransaction(transaction);
+                          transactionForm.setValue('amount', transaction.amount.toString());
+                          transactionForm.setValue('eventDate', transaction.event_date.split('T')[0]);
+                          transactionForm.setValue('notes', transaction.notes || '');
+                          setTransactionDialogOpen(true);
+                        }}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={() => setDeleteTransactionId(transaction.id)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={transactionDialogOpen} onOpenChange={(open) => {
+        setTransactionDialogOpen(open);
+        if (!open) {
+          setEditingTransaction(null);
+          transactionForm.reset();
+        }
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingTransaction ? 'Edit Transaction' : 'Add New Transaction'}</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={transactionForm.handleSubmit(onTransactionSubmit)} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="amount">Amount</Label>
+              <Input 
+                id="amount"
+                type="number" 
+                step="0.01" 
+                placeholder="Enter amount (negative for debit)" 
+                {...transactionForm.register("amount")} 
+              />
+              {transactionForm.formState.errors.amount && (
+                <p className="text-sm text-destructive">{transactionForm.formState.errors.amount.message}</p>
+              )}
             </div>
-          </ScrollArea>
+            <div className="space-y-2">
+              <Label htmlFor="eventDate">Event Date</Label>
+              <Input 
+                id="eventDate"
+                type="date" 
+                {...transactionForm.register("eventDate")} 
+              />
+              {transactionForm.formState.errors.eventDate && (
+                <p className="text-sm text-destructive">{transactionForm.formState.errors.eventDate.message}</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="notes">Notes (Optional)</Label>
+              <Textarea 
+                id="notes"
+                placeholder="Enter notes" 
+                {...transactionForm.register("notes")} 
+                rows={3}
+              />
+              {transactionForm.formState.errors.notes && (
+                <p className="text-sm text-destructive">{transactionForm.formState.errors.notes.message}</p>
+              )}
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button type="button" variant="outline" onClick={() => {
+                setTransactionDialogOpen(false);
+                setEditingTransaction(null);
+                transactionForm.reset();
+              }}>
+                Cancel
+              </Button>
+              <Button type="submit">{editingTransaction ? 'Update' : 'Create'}</Button>
+            </div>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -460,6 +740,37 @@ const CustomersTab = () => {
           </form>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteCustomerDialogOpen} onOpenChange={setDeleteCustomerDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Customer</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete {customerToDelete?.firstName} {customerToDelete?.lastName}? 
+              This will also delete all associated transactions. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteCustomer}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!deleteTransactionId} onOpenChange={() => setDeleteTransactionId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Transaction</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this transaction? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDeleteTransaction}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 };
