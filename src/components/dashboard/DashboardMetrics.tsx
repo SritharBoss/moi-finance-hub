@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { TrendingUp, TrendingDown, Users, UserCheck, CreditCard, Wallet } from "lucide-react";
+import { TrendingUp, Users, UserCheck, CreditCard, Wallet } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 
 interface MetricsData {
   lastWeekAmount: number;
@@ -15,35 +17,83 @@ interface MetricsData {
 const DashboardMetrics = () => {
   const [metrics, setMetrics] = useState<MetricsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
 
   useEffect(() => {
-    // TODO: Replace with actual API call
-    // Simulating API call with mock data
-    const fetchMetrics = async () => {
-      try {
-        // const response = await fetch('/api/dashboard-metrics');
-        // const data = await response.json();
-        
-        // Mock data for demonstration
-        const mockData: MetricsData = {
-          lastWeekAmount: 12500,
-          lastMonthAmount: 45800,
-          totalCustomers: 156,
-          activeCustomers: 89,
-          creditAmount: 23400,
-          debitAmount: 15600,
-        };
-        
-        setMetrics(mockData);
-      } catch (error) {
-        console.error("Error fetching metrics:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchMetrics();
   }, []);
+
+  const fetchMetrics = async () => {
+    try {
+      setLoading(true);
+
+      // Fetch all customers
+      const { data: customers, error: customersError } = await supabase
+        .from('customers')
+        .select('*');
+
+      if (customersError) throw customersError;
+
+      // Fetch all transactions
+      const { data: transactions, error: transactionsError } = await supabase
+        .from('transactions')
+        .select('*');
+
+      if (transactionsError) throw transactionsError;
+
+      // Calculate metrics
+      const now = new Date();
+      const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const oneMonthAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      // Last week and month amounts
+      const lastWeekAmount = transactions
+        ?.filter(t => new Date(t.created_date) >= oneWeekAgo)
+        .reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+      const lastMonthAmount = transactions
+        ?.filter(t => new Date(t.created_date) >= oneMonthAgo)
+        .reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+      // Total customers
+      const totalCustomers = customers?.length || 0;
+
+      // Active customers (customers with transactions in the last 30 days)
+      const activeCustomerIds = new Set(
+        transactions
+          ?.filter(t => new Date(t.created_date) >= oneMonthAgo)
+          .map(t => t.customer_id)
+      );
+      const activeCustomers = activeCustomerIds.size;
+
+      // Credit and debit amounts
+      const creditAmount = transactions
+        ?.filter(t => Number(t.amount) > 0)
+        .reduce((sum, t) => sum + Number(t.amount), 0) || 0;
+
+      const debitAmount = transactions
+        ?.filter(t => Number(t.amount) < 0)
+        .reduce((sum, t) => sum + Math.abs(Number(t.amount)), 0) || 0;
+
+      setMetrics({
+        lastWeekAmount,
+        lastMonthAmount,
+        totalCustomers,
+        activeCustomers,
+        creditAmount,
+        debitAmount,
+      });
+    } catch (error) {
+      console.error("Error fetching metrics:", error);
+      toast({
+        title: "Error",
+        description: "Failed to fetch dashboard metrics",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-IN', {
